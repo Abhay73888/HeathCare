@@ -1,0 +1,19 @@
+# Secrets — NEVER commit these
+.env
+
+# Local data
+consultations.json
+reminders.json
+health_report.md
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.dist/
+*.egg-info/
+
+# Editor
+.vscode/
+.idea/

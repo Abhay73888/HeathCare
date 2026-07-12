@@ -1,0 +1,12 @@
+# ── MediMate AI — dependencies ──
+# Install with:  pip install -r requirements.txt
+
+streamlit>=1.30.0        # the web app UI (browser chat)
+python-dotenv>=1.0.0     # load API keys from .env
+httpx>=0.27.0            # async web requests (Serper search)
+rich>=13.7.0            # beautiful terminal UI
+
+# AI brain (optional but recommended — unlocks smart answers)
+pydantic>=2.6.0
+pydantic-ai>=0.0.14
+groq>=0.11.0
