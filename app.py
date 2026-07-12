@@ -29,7 +29,33 @@ COMMANDS (type these anytime)
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
+
+# ─────────────────────────────────────────────────────────────
+# 🌐 STREAMLIT CLOUD AUTO-REDIRECT
+# If this file is launched by Streamlit (e.g. the Cloud deploy was
+# configured with main module 'app.py'), app.py is the *terminal* CLI and
+# can't read input in a browser -> it hangs on "What's your name?" and shows
+# a blank page. So: detect Streamlit and hand off to the real web UI instead.
+# In a normal terminal this block is skipped and the CLI runs as usual.
+# ─────────────────────────────────────────────────────────────
+def _running_under_streamlit() -> bool:
+    if os.environ.get("STREAMLIT_SERVER_PORT") or os.environ.get("STREAMLIT_RUNTIME"):
+        return True
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+        return get_script_run_ctx() is not None
+    except Exception:
+        return False
+
+
+if _running_under_streamlit():
+    # Re-run the browser UI in this same Streamlit process, then stop.
+    import runpy
+    _here = os.path.dirname(os.path.abspath(__file__))
+    runpy.run_path(os.path.join(_here, "web_app.py"), run_name="__main__")
+    sys.exit(0)
 
 import config
 import calculators
