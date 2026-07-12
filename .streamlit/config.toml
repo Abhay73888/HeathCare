@@ -1,0 +1,17 @@
+# MediMate AI — Streamlit theme & server settings
+# Forces a clean, readable light theme on Streamlit Cloud
+# (so it never shows a dark/blank screen based on the visitor's browser).
+
+[theme]
+base = "light"
+primaryColor = "#E92063"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F5F7FA"
+textColor = "#1A1A2E"
+font = "sans serif"
+
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false

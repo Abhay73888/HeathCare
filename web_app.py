@@ -27,17 +27,99 @@ st.set_page_config(
     page_title=f"{config.APP_NAME} — Health Companion",
     page_icon="🏥",
     layout="centered",
+    initial_sidebar_state="expanded",
 )
 
 
 def _run(coro):
-    """Run an async coroutine from Streamlit's sync world."""
+    """
+    Run an async coroutine from Streamlit's sync world.
+
+    IMPORTANT (cloud fix): Streamlit Cloud runs each script in a worker THREAD
+    that has NO event loop. The old asyncio.get_event_loop() raised there and
+    left the page blank. We always create a FRESH loop, run, then close it —
+    works both locally and on Streamlit Cloud.
+    """
+    loop = asyncio.new_event_loop()
     try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-    return loop.run_until_complete(coro)
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+        asyncio.set_event_loop(None)
+
+
+# ─────────────────────────────────────────────
+# 🎨 CUSTOM CSS  —  makes the chat look premium
+# ─────────────────────────────────────────────
+st.markdown(
+    """
+    <style>
+      /* ---- Global background: soft gradient ---- */
+      .stApp {
+        background: linear-gradient(160deg, #f5f7fa 0%, #e8f0fe 100%);
+      }
+
+      /* ---- Hero header card ---- */
+      .medimate-hero {
+        background: linear-gradient(135deg, #E92063 0%, #F55036 100%);
+        padding: 1.6rem 1.8rem;
+        border-radius: 20px;
+        color: #ffffff;
+        box-shadow: 0 10px 30px rgba(233, 32, 99, 0.25);
+        margin-bottom: 1.2rem;
+      }
+      .medimate-hero h1 { margin: 0; font-size: 2.1rem; font-weight: 800; }
+      .medimate-hero p  { margin: 0.4rem 0 0; opacity: 0.95; font-size: 1rem; }
+
+      /* ---- Chat bubbles ---- */
+      [data-testid="stChatMessage"] {
+        border-radius: 18px;
+        padding: 0.4rem 0.6rem;
+        margin-bottom: 0.5rem;
+        box-shadow: 0 3px 12px rgba(0,0,0,0.06);
+        border: 1px solid rgba(0,0,0,0.04);
+      }
+
+      /* ---- Chat input box ---- */
+      [data-testid="stChatInput"] {
+        border-radius: 16px;
+        border: 2px solid #E92063;
+        box-shadow: 0 4px 14px rgba(233,32,99,0.15);
+      }
+
+      /* ---- Sidebar polish ---- */
+      [data-testid="stSidebar"] {
+        background: #ffffff;
+        border-right: 1px solid #eceff4;
+      }
+
+      /* ---- Buttons ---- */
+      .stButton > button {
+        border-radius: 12px;
+        border: none;
+        background: linear-gradient(135deg, #E92063, #F55036);
+        color: #fff;
+        font-weight: 600;
+        transition: transform 0.12s ease;
+      }
+      .stButton > button:hover { transform: translateY(-2px); }
+
+      /* ---- Feature status pills ---- */
+      .feat-pill {
+        display: inline-block; padding: 3px 10px; margin: 3px 2px;
+        border-radius: 999px; font-size: 0.82rem; font-weight: 600;
+      }
+      .feat-on  { background: #dcfce7; color: #15803d; }
+      .feat-off { background: #f1f5f9; color: #94a3b8; }
+
+      /* hide the default Streamlit menu/footer for a clean look */
+      #MainMenu { visibility: hidden; }
+      footer    { visibility: hidden; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 # ─────────────────────────────────────────────
@@ -58,10 +140,15 @@ with st.sidebar:
     )
 
     st.subheader("🔌 Feature status")
+    pills = ""
     for feature, on in config.feature_status().items():
-        st.write(("🟢 " if on else "⚪ ") + feature)
+        cls = "feat-on" if on else "feat-off"
+        dot = "🟢" if on else "⚪"
+        pills += f'<span class="feat-pill {cls}">{dot} {feature}</span>'
+    st.markdown(pills, unsafe_allow_html=True)
 
-    if st.button("🗑️ Clear chat"):
+    st.write("")
+    if st.button("🗑️ Clear chat", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
 
@@ -69,13 +156,22 @@ with st.sidebar:
 
 
 # ─────────────────────────────────────────────
-# HEADER
+# HEADER  —  hero card
 # ─────────────────────────────────────────────
-st.title("🏥 MediMate AI")
-st.caption("Apna health sawaal likho — AI turant jawab dega. Emergency detect hote hi helpline number bhi milega. 🚑")
+st.markdown(
+    """
+    <div class="medimate-hero">
+      <h1>🏥 MediMate AI</h1>
+      <p>Apna health sawaal likho — AI turant jawab dega.
+      Emergency detect hote hi helpline number bhi milega. 🚑</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 if not config.HAS_LLM:
-    st.warning("⚠️ Koi GROQ_API_KEY nahi mili — abhi offline mode chalega. .env me key daalo full AI ke liye.")
+    st.warning("⚠️ Koi GROQ_API_KEY nahi mili — abhi offline mode chalega. "
+               "Streamlit **Secrets** me key daalo full AI ke liye.")
 
 
 # ─────────────────────────────────────────────
@@ -83,6 +179,18 @@ if not config.HAS_LLM:
 # ─────────────────────────────────────────────
 if "messages" not in st.session_state:
     st.session_state.messages = []
+
+# Friendly welcome bubble on first load
+if not st.session_state.messages:
+    with st.chat_message("assistant", avatar="🏥"):
+        st.markdown(
+            "Namaste! 👋 Main **MediMate AI** hoon.\n\n"
+            "Aap mujhse pooch sakte ho — jaise:\n"
+            "- *\"I have a headache and fever, what should I do?\"*\n"
+            "- *\"What are the symptoms of diabetes?\"*\n"
+            "- *\"Is my BMI healthy for 70kg and 175cm?\"*\n\n"
+            "Neeche box me apna sawaal type karo. 😊"
+        )
 
 # Replay past chat
 for msg in st.session_state.messages:
@@ -104,13 +212,19 @@ if prompt:
     # get AI answer
     with st.chat_message("assistant", avatar="🏥"):
         with st.spinner("Soch raha hoon… 🤔"):
-            resp = _run(agent.answer_question(
-                prompt,
-                patient_name=patient_name,
-                language=language,
-                country=country,
-                save=True,
-            ))
+            try:
+                resp = _run(agent.answer_question(
+                    prompt,
+                    patient_name=patient_name,
+                    language=language,
+                    country=country,
+                    save=True,
+                ))
+            except Exception as e:
+                # Never show a blank screen — surface the error kindly.
+                st.error(f"😔 Kuch gadbad ho gayi: `{e}`\n\n"
+                         "Thodi der baad phir try karo, ya /status check karo.")
+                st.stop()
 
         # ── Build a rich, readable reply ──
         urgency_emoji = {
