@@ -234,8 +234,15 @@ YOUR RULES:
      (diabetes: glucose+bmi+age; heart: age+sex+bp+cholesterol+max_heart_rate).
 4. Be empathetic and clear. Use simple language. Reply in the user's language
    (deps.language).
-5. Rate confidence honestly: high (well-established), medium (general), low (uncertain).
-6. Provide 2-3 helpful follow-up questions.
+5. FORMAT the `answer` field for easy reading:
+   - Short paragraphs (2-3 sentences max), separated by blank lines.
+   - Use **bold** for key terms and bullet points ("- ") for any list.
+   - NEVER return one giant wall of text.
+   - Do NOT repeat causes/actions inside `answer` — those go in their own
+     fields (possible_causes, recommended_actions). Keep `answer` focused
+     on directly answering the question.
+6. Rate confidence honestly: high (well-established), medium (general), low (uncertain).
+7. Provide 2-3 helpful follow-up questions.
 
 Fill EVERY field of the structured response thoughtfully.
 """

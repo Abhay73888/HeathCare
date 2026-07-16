@@ -1,3 +1,4 @@
+
 """
 ╔══════════════════════════════════════════════════════════════╗
 ║     🏥  MediMate AI  —  Web App (runs in Chrome/browser)      ║
@@ -16,6 +17,7 @@ import asyncio
 
 import streamlit as st
 
+import auth
 import config
 import healthcare_agent as agent
 import ml_predictor
@@ -115,6 +117,27 @@ st.markdown(
       .feat-on  { background: #dcfce7; color: #15803d; }
       .feat-off { background: #f1f5f9; color: #94a3b8; }
 
+      /* ---- 🔐 Login card + user chip ---- */
+      .login-card {
+        background: #ffffff;
+        border-radius: 20px;
+        padding: 1.6rem 1.8rem;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+        border: 1px solid #eceff4;
+        margin-bottom: 1rem;
+      }
+      .user-chip {
+        display: flex; align-items: center; gap: 8px;
+        background: #f0fdf4; border: 1px solid #bbf7d0;
+        border-radius: 14px; padding: 8px 12px; margin-bottom: 8px;
+        font-weight: 600; color: #15803d; font-size: 0.9rem;
+      }
+      .guest-chip {
+        background: #fff7ed; border: 1px solid #fed7aa;
+        border-radius: 14px; padding: 8px 12px; margin-bottom: 8px;
+        font-weight: 600; color: #c2410c; font-size: 0.9rem;
+      }
+
       /* hide the default Streamlit menu/footer for a clean look */
       #MainMenu { visibility: hidden; }
       footer    { visibility: hidden; }
@@ -125,14 +148,99 @@ st.markdown(
 
 
 # ─────────────────────────────────────────────
-# SIDEBAR  —  settings + live feature status
+# 🔐 LOGIN PANEL  —  ChatGPT-style (Google + Email + Guest)
 # ─────────────────────────────────────────────
+def render_login_panel(reason: str = ""):
+    """
+    Login/signup UI dikhao.
+    reason = optional message (e.g. "guest limit khatam ho gayi").
+    """
+    st.markdown('<div class="login-card">', unsafe_allow_html=True)
+    st.subheader("🔐 Login karo — MediMate AI")
+    if reason:
+        st.warning(reason)
+
+    # ── 🔵 Google login (agar setup hai) ──
+    if auth.google_configured():
+        if st.button("🔵  Continue with Google", use_container_width=True,
+                     key="google_login_btn"):
+            st.login()   # Streamlit native OIDC → Google page pe le jayega
+        st.markdown(
+            "<p style='text-align:center; color:#94a3b8; margin:6px 0;'>— ya —</p>",
+            unsafe_allow_html=True)
+    else:
+        st.caption("💡 Google login enable karne ke liye `.streamlit/secrets.toml` "
+                   "banao (dekho `secrets.toml.example`).")
+
+    # ── 📧 Email login / ✍️ Signup tabs ──
+    tab_login, tab_signup = st.tabs(["📧 Login", "✍️ Sign up"])
+
+    with tab_login:
+        with st.form("login_form", clear_on_submit=False):
+            email = st.text_input("Email", key="li_email")
+            password = st.text_input("Password", type="password", key="li_pass")
+            if st.form_submit_button("🔑 Login", use_container_width=True):
+                res = auth.login(email, password)
+                if res["ok"]:
+                    auth.set_local_user(res["user"])
+                    st.success(f"Welcome back, {res['user']['name']}! 🎉")
+                    st.rerun()
+                else:
+                    st.error(res["error"])
+
+    with tab_signup:
+        with st.form("signup_form", clear_on_submit=False):
+            name = st.text_input("Naam", key="su_name")
+            email = st.text_input("Email", key="su_email")
+            password = st.text_input("Password (min 6 chars)", type="password", key="su_pass")
+            if st.form_submit_button("✨ Account banao", use_container_width=True):
+                res = auth.signup(name, email, password)
+                if res["ok"]:
+                    # signup ke turant baad auto-login — smooth experience
+                    auth.set_local_user({"name": name.strip(), "email": email.strip().lower(),
+                                         "provider": "email"})
+                    st.success("Account ban gaya! 🎉")
+                    st.rerun()
+                else:
+                    st.error(res["error"])
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────
+# SIDEBAR  —  account + settings + live feature status
+# ─────────────────────────────────────────────
+user = auth.current_user()   # None = guest mode
+
 with st.sidebar:
     st.title("🏥 " + config.APP_NAME)
     st.caption(config.APP_TAGLINE + f"  ·  v{config.VERSION}")
 
+    # ── 👤 Account section (ChatGPT-style) ──
+    st.subheader("👤 Account")
+    if user:
+        provider_icon = "🔵" if user.get("provider") == "google" else "📧"
+        st.markdown(
+            f'<div class="user-chip">✅ {user["name"]}<br>'
+            f'<span style="font-weight:400; font-size:0.8rem;">'
+            f'{provider_icon} {user.get("email","")}</span></div>',
+            unsafe_allow_html=True)
+        if st.button("🚪 Logout", use_container_width=True, key="logout_btn"):
+            auth.logout()
+            st.rerun()
+    else:
+        left = auth.guest_messages_left()
+        st.markdown(
+            f'<div class="guest-chip">👤 Guest mode — '
+            f'{left}/{auth.GUEST_MESSAGE_LIMIT} free messages bache</div>',
+            unsafe_allow_html=True)
+        st.progress(auth.guest_messages_used() / auth.GUEST_MESSAGE_LIMIT)
+        if st.button("🔐 Login / Sign up", use_container_width=True, key="open_login_btn"):
+            st.session_state["show_login"] = True
+            st.rerun()
+
     st.subheader("👤 Your details")
-    patient_name = st.text_input("Name", value="You")
+    patient_name = st.text_input("Name", value=user["name"] if user else "You")
     language = st.selectbox("Reply language", config.SUPPORTED_LANGUAGES, index=0)
     country = st.selectbox(
         "Country (for emergency numbers)",
@@ -174,6 +282,28 @@ st.markdown(
 if not config.HAS_LLM:
     st.warning("⚠️ Koi GROQ_API_KEY nahi mili — abhi offline mode chalega. "
                "Streamlit **Secrets** me key daalo full AI ke liye.")
+
+
+# ─────────────────────────────────────────────
+# 🔐 LOGIN GATE  —  ChatGPT-style
+#   guest limit khatam → login panel FORCE dikhao
+#   sidebar se "Login" dabaya → login panel dikhao
+# ─────────────────────────────────────────────
+guest_limit_hit = (user is None) and (auth.guest_messages_left() <= 0)
+
+if guest_limit_hit:
+    render_login_panel(
+        f"👋 Aapke {auth.GUEST_MESSAGE_LIMIT} free messages khatam ho gaye! "
+        "Unlimited chat ke liye login karo — bilkul free hai. 🎁")
+elif st.session_state.get("show_login") and user is None:
+    render_login_panel()
+    if st.button("⬅️ Wapas chat pe (guest)", key="back_to_chat"):
+        st.session_state["show_login"] = False
+        st.rerun()
+
+# Login ho gaya to panel band kar do
+if user:
+    st.session_state["show_login"] = False
 
 
 # ─────────────────────────────────────────────
@@ -297,15 +427,27 @@ if not st.session_state.messages:
 # Replay past chat
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"], avatar="🧑" if msg["role"] == "user" else "🏥"):
-        st.markdown(msg["content"])
+        st.markdown(msg["content"], unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────
 # INPUT  —  the chat box at the bottom
+#   🔐 Guest limit khatam → box disable (ChatGPT-style)
 # ─────────────────────────────────────────────
-prompt = st.chat_input("Type your health question here…")
+if guest_limit_hit:
+    # Box dikhta hai par disabled — placeholder me hi wajah likhi hai.
+    st.chat_input("🔐 Login karke unlimited chat karo…", disabled=True)
+    prompt = None
+else:
+    hint = ("Type your health question here…" if user else
+            f"Type your question… ({auth.guest_messages_left()} free messages bache)")
+    prompt = st.chat_input(hint)
 
 if prompt:
+    # 👤 Guest hai to counter badhao (login wale unlimited)
+    if user is None:
+        auth.record_guest_message()
+
     # show user's message
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user", avatar="🧑"):
@@ -328,7 +470,7 @@ if prompt:
                          "Thodi der baad phir try karo, ya /status check karo.")
                 st.stop()
 
-        # ── Build a rich, readable reply ──
+        # ── Build a rich, ORGANIZED reply (proper sections + spacing) ──
         urgency_emoji = {
             "emergency": "🚨", "urgent": "⚠️", "routine": "📋",
             "self-care": "🌿", "informational": "ℹ️",
@@ -348,25 +490,32 @@ if prompt:
             if resp.source == "offline" and resp.note:
                 st.warning(f"⚠️ {resp.note}  Showing an offline answer instead.")
 
-        parts = [resp.answer]
+        # Har section apna alag block — blank lines se markdown clean render hota hai.
+        parts = [resp.answer.strip()]
 
         if resp.possible_causes:
-            parts.append("\n**🔎 Possible causes:**\n" +
+            parts.append("#### 🔎 Possible causes\n" +
                          "\n".join(f"- {c}" for c in resp.possible_causes))
 
         if resp.recommended_actions:
-            parts.append("\n**📋 Recommended actions:**\n" +
-                         "\n".join(f"- {a}" for a in resp.recommended_actions))
+            parts.append("#### 📋 Recommended actions\n" +
+                         "\n".join(f"{i}. {a}" for i, a in
+                                   enumerate(resp.recommended_actions, 1)))
 
         if resp.when_to_see_doctor:
-            parts.append(f"\n**👩‍⚕️ When to see a doctor:** {resp.when_to_see_doctor}")
+            parts.append("#### 👩‍⚕️ When to see a doctor\n" +
+                         f"> {resp.when_to_see_doctor}")
 
         if resp.follow_up_questions:
-            parts.append("\n**💬 You could also ask:**\n" +
-                         "\n".join(f"- {q}" for q in resp.follow_up_questions))
+            parts.append("#### 💬 You could also ask\n" +
+                         "\n".join(f"- *{q}*" for q in resp.follow_up_questions))
 
-        parts.append(f"\n\n---\n_{resp.disclaimer}_")
+        parts.append(f"---\n<sub>{resp.disclaimer}</sub>")
 
-        full = "\n".join(parts)
-        st.markdown(full)
+        # Double newline BETWEEN sections = proper paragraph breaks in markdown.
+        full = "\n\n".join(parts)
+        st.markdown(full, unsafe_allow_html=True)
         st.session_state.messages.append({"role": "assistant", "content": full})
+
+    # 🔄 Rerun so the sidebar guest-counter & login gate update instantly.
+    st.rerun()

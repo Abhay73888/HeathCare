@@ -1,5 +1,9 @@
 # Secrets — NEVER commit these
 .env
+.streamlit/secrets.toml
+
+# User accounts (hashed passwords, but still private)
+users.json
 
 # Local data
 consultations.json
