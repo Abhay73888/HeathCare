@@ -38,6 +38,7 @@ import nutrition
 import weather_health
 import news
 import reminders
+import ml_predictor
 
 
 # ─────────────────────────────────────────────
@@ -173,6 +174,34 @@ def set_reminder(medicine: str, time_hhmm: str, patient: str = "You") -> str:
     return result["error"]
 
 
+def ml_risk_prediction(condition: str, **params) -> str:
+    """🧠 REAL ML prediction — trained RandomForest models (not the LLM guessing!).
+    condition = 'diabetes' | 'heart'. Returns formatted risk + advice."""
+    print(f"   🧠 [tool] ml_risk_prediction: {condition} {params}")
+    try:
+        if condition == "diabetes":
+            result = ml_predictor.predict_diabetes(
+                glucose=float(params["glucose"]),
+                bmi=float(params["bmi"]),
+                age=int(params["age"]),
+                blood_pressure=float(params.get("blood_pressure", 72)),
+            )
+        elif condition == "heart":
+            result = ml_predictor.predict_heart(
+                age=int(params["age"]),
+                sex=str(params.get("sex", "male")),
+                resting_bp=float(params.get("resting_bp", 120)),
+                cholesterol=float(params.get("cholesterol", 200)),
+                max_heart_rate=float(params.get("max_heart_rate", 150)),
+                exercise_angina=bool(params.get("exercise_angina", False)),
+            )
+        else:
+            return f"Unknown condition '{condition}'. Use 'diabetes' or 'heart'."
+    except (KeyError, ValueError) as e:
+        return f"Missing/invalid parameter for {condition} prediction: {e}"
+    return ml_predictor.format_prediction(result)
+
+
 # ═════════════════════════════════════════════════════════════
 #  THE LLM AGENT  (built lazily so offline mode needs no extra deps)
 # ═════════════════════════════════════════════════════════════
@@ -199,6 +228,10 @@ YOUR RULES:
    - weather_alert: when asked about weather, pollution/AQI, or outdoor safety.
    - health_news: when asked for latest health news/updates.
    - set_reminder: when the user wants a medicine reminder (needs medicine + HH:MM time).
+   - ml_risk_prediction: REAL trained ML model for diabetes/heart-disease risk.
+     Use when the user shares numbers like glucose, BMI, BP, cholesterol and asks
+     about their diabetes or heart risk. Ask for missing required numbers first
+     (diabetes: glucose+bmi+age; heart: age+sex+bp+cholesterol+max_heart_rate).
 4. Be empathetic and clear. Use simple language. Reply in the user's language
    (deps.language).
 5. Rate confidence honestly: high (well-established), medium (general), low (uncertain).
@@ -294,6 +327,17 @@ def _build_agent():
         """Set a daily medicine reminder at HH:MM (24-hour time)."""
         return set_reminder(medicine, time_hhmm, ctx.deps.patient_name)
 
+    @agent.tool
+    async def tool_ml_prediction(ctx: RunContext[Deps], condition: str, params_json: str = "{}") -> str:
+        """REAL trained ML risk prediction. condition = diabetes|heart.
+        params_json for diabetes: {"glucose":150,"bmi":32,"age":45,"blood_pressure":80}
+        params_json for heart: {"age":58,"sex":"male","resting_bp":145,"cholesterol":250,"max_heart_rate":140,"exercise_angina":true}"""
+        try:
+            params = json.loads(params_json) if params_json else {}
+        except json.JSONDecodeError:
+            params = {}
+        return ml_risk_prediction(condition, **params)
+
     return agent, Deps, LLMResponse
 
 
@@ -347,31 +391,46 @@ async def answer_question(question: str, patient_name: str = "User",
     # ── STEP 2: Smart AI path ──
     offline_note = ""  # if the AI fails, we explain WHY in the offline reply
     if config.HAS_LLM:
-        try:
-            agent, Deps, _ = _get_agent()
-            deps = Deps(patient_name=patient_name, language=language, country=country)
-            result = await agent.run(question, deps=deps)
-            data = getattr(result, "output", None) or getattr(result, "data", None)
+        # Some Groq models occasionally emit a malformed tool-call and the whole
+        # run fails to format ("Exceeded maximum output retries"). That failure
+        # is INTERMITTENT — the very same question usually succeeds on a fresh
+        # attempt. So we retry the ENTIRE run a few times before giving up and
+        # dropping to offline mode. This is what keeps answers consistently "AI".
+        MAX_ATTEMPTS = 3
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            try:
+                agent, Deps, _ = _get_agent()
+                deps = Deps(patient_name=patient_name, language=language, country=country)
+                result = await agent.run(question, deps=deps)
+                data = getattr(result, "output", None) or getattr(result, "data", None)
 
-            resp = HealthcareResponse(
-                answer=data.answer,
-                urgency_level=data.urgency_level,
-                possible_causes=list(data.possible_causes),
-                recommended_actions=list(data.recommended_actions),
-                when_to_see_doctor=data.when_to_see_doctor,
-                web_searched=data.web_searched,
-                confidence=data.confidence,
-                disclaimer=data.disclaimer,
-                follow_up_questions=list(data.follow_up_questions),
-                source="ai",
-            )
-            if save:
-                history.save_consultation(patient_name, question, resp.answer, resp.urgency_level)
-            return resp
-        except Exception as e:
-            # LLM failed -> figure out WHY so we can tell the user honestly.
-            offline_note = _explain_llm_error(e)
-            print(f"   ⚠️  LLM unavailable ({offline_note}). Falling back to offline mode.")
+                resp = HealthcareResponse(
+                    answer=data.answer,
+                    urgency_level=data.urgency_level,
+                    possible_causes=list(data.possible_causes),
+                    recommended_actions=list(data.recommended_actions),
+                    when_to_see_doctor=data.when_to_see_doctor,
+                    web_searched=data.web_searched,
+                    confidence=data.confidence,
+                    disclaimer=data.disclaimer,
+                    follow_up_questions=list(data.follow_up_questions),
+                    source="ai",
+                )
+                if save:
+                    history.save_consultation(patient_name, question, resp.answer, resp.urgency_level)
+                return resp
+            except Exception as e:
+                offline_note = _explain_llm_error(e)
+                # A format/validation miss is intermittent -> retry the whole run.
+                text = str(e).lower()
+                retryable = ("maximum output retries" in text or "validation" in text
+                             or "unexpectedmodelbehavior" in type(e).__name__.lower())
+                if retryable and attempt < MAX_ATTEMPTS:
+                    print(f"   🔄 AI format hiccup (attempt {attempt}/{MAX_ATTEMPTS}). Retrying…")
+                    continue
+                # Rate-limit / bad-key / network -> no point retrying; fall through.
+                print(f"   ⚠️  LLM unavailable ({offline_note}). Falling back to offline mode.")
+                break
 
     # ── STEP 3: Offline fallback ──
     resp = _offline_answer(question)

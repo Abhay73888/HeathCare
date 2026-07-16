@@ -18,6 +18,8 @@ import streamlit as st
 
 import config
 import healthcare_agent as agent
+import ml_predictor
+import calculators
 
 
 # ─────────────────────────────────────────────
@@ -172,6 +174,106 @@ st.markdown(
 if not config.HAS_LLM:
     st.warning("⚠️ Koi GROQ_API_KEY nahi mili — abhi offline mode chalega. "
                "Streamlit **Secrets** me key daalo full AI ke liye.")
+
+
+# ─────────────────────────────────────────────
+# ⚖️ BMI CALCULATOR  —  instant, offline, no API needed
+# ─────────────────────────────────────────────
+with st.expander("⚖️ BMI Calculator — apna BMI turant check karo"):
+    c1, c2 = st.columns(2)
+    with c1:
+        bmi_weight = st.number_input("Weight (kg)", 10.0, 300.0, 70.0, step=0.5, key="bmi_wt")
+    with c2:
+        bmi_height = st.number_input("Height (cm)", 50.0, 250.0, 170.0, step=0.5, key="bmi_ht")
+
+    if st.button("⚖️ Calculate BMI", use_container_width=True, key="bmi_btn"):
+        res = calculators.bmi(bmi_weight, bmi_height)
+        rng = calculators.ideal_weight(bmi_height, "male")["healthy_range_kg"]
+
+        # Color-coded result card by WHO category
+        show = (st.success if res["category"] == "Normal weight"
+                else st.error if res["category"] == "Obese"
+                else st.warning)
+        show(f"{res['emoji']} **BMI: {res['bmi']}** — {res['category']}")
+
+        # Scale: 18.5–25 normal band; progress bar as a quick visual (capped at 40)
+        st.progress(min(res["bmi"] / 40, 1.0))
+        st.caption("Scale: <18.5 Underweight · 18.5–24.9 Normal ✅ · 25–29.9 Overweight · 30+ Obese")
+
+        st.markdown(f"- 💡 {res['note']}\n"
+                    f"- 🎯 Aapki height ({bmi_height:.0f} cm) ke liye healthy weight range: "
+                    f"**{rng[0]}–{rng[1]} kg**")
+        st.caption("⚠️ BMI ek simple screening number hai — muscle mass, age, body type "
+                   "consider nahi karta. Sahi assessment ke liye doctor se milo.")
+
+
+
+with st.expander("🧠 ML Risk Predictor — diabetes & heart risk check karo (real ML!)"):
+    if not ml_predictor.models_ready():
+        st.info("🤖 Models abhi trained nahi hain. Terminal me ek baar chalao:\n\n"
+                "```\npython ml_predictor.py\n```\n"
+                "(internet chahiye sirf pehli baar — phir offline chalega)")
+    else:
+        m = ml_predictor.get_metrics()
+        if m:
+            st.caption(f"📊 Model accuracy — Diabetes: {m['diabetes']['accuracy']*100:.0f}% · "
+                       f"Heart: {m['heart']['accuracy']*100:.0f}% (on unseen test data)")
+
+        tab_dia, tab_heart = st.tabs(["🍬 Diabetes risk", "❤️ Heart risk"])
+
+        # ── 🍬 Diabetes tab ──
+        with tab_dia:
+            c1, c2 = st.columns(2)
+            with c1:
+                d_glucose = st.number_input("Fasting glucose (mg/dL)", 40, 400, 100, key="d_glu")
+                d_bmi = st.number_input("BMI", 10.0, 60.0, 24.0, step=0.5, key="d_bmi")
+            with c2:
+                d_age = st.number_input("Age (years)", 1, 120, 30, key="d_age")
+                d_bp = st.number_input("Blood pressure (diastolic, mm Hg)", 40, 140, 72, key="d_bp")
+
+            if st.button("🔮 Predict diabetes risk", use_container_width=True, key="d_btn"):
+                res = ml_predictor.predict_diabetes(
+                    glucose=d_glucose, bmi=d_bmi, age=d_age, blood_pressure=d_bp)
+                if res["ok"]:
+                    lvl = res["risk_level"]
+                    show = st.error if lvl == "HIGH" else st.warning if lvl == "MODERATE" else st.success
+                    show(f"{res['emoji']} **{res['condition']} risk: {lvl}** "
+                         f"(~{res['risk_percent']}% probability)")
+                    st.progress(min(res["risk_percent"] / 100, 1.0))
+                    for a in res["advice"]:
+                        st.markdown(f"- {a}")
+                    st.caption(f"{res['model']}  ·  {res['disclaimer']}")
+                else:
+                    st.info(res["error"])
+
+        # ── ❤️ Heart tab ──
+        with tab_heart:
+            c1, c2 = st.columns(2)
+            with c1:
+                h_age = st.number_input("Age (years)", 1, 120, 45, key="h_age")
+                h_sex = st.selectbox("Sex", ["Male", "Female"], key="h_sex")
+                h_bp = st.number_input("Resting BP (systolic, mm Hg)", 70, 250, 120, key="h_bp")
+            with c2:
+                h_chol = st.number_input("Cholesterol (mg/dL)", 100, 600, 200, key="h_chol")
+                h_hr = st.number_input("Max heart rate achieved", 60, 220, 150, key="h_hr")
+                h_angina = st.checkbox("Exercise me chest pain hota hai?", key="h_ang")
+
+            if st.button("🔮 Predict heart risk", use_container_width=True, key="h_btn"):
+                res = ml_predictor.predict_heart(
+                    age=h_age, sex=h_sex.lower(), resting_bp=h_bp,
+                    cholesterol=h_chol, max_heart_rate=h_hr,
+                    exercise_angina=h_angina)
+                if res["ok"]:
+                    lvl = res["risk_level"]
+                    show = st.error if lvl == "HIGH" else st.warning if lvl == "MODERATE" else st.success
+                    show(f"{res['emoji']} **{res['condition']} risk: {lvl}** "
+                         f"(~{res['risk_percent']}% probability)")
+                    st.progress(min(res["risk_percent"] / 100, 1.0))
+                    for a in res["advice"]:
+                        st.markdown(f"- {a}")
+                    st.caption(f"{res['model']}  ·  {res['disclaimer']}")
+                else:
+                    st.info(res["error"])
 
 
 # ─────────────────────────────────────────────

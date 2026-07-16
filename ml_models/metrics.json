@@ -1,0 +1,14 @@
+{
+  "diabetes": {
+    "accuracy": 0.747,
+    "roc_auc": 0.826,
+    "train_size": 614,
+    "test_size": 154
+  },
+  "heart": {
+    "accuracy": 0.803,
+    "roc_auc": 0.916,
+    "train_size": 242,
+    "test_size": 61
+  }
+}

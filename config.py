@@ -113,6 +113,10 @@ def status_banner() -> str:
 
 def feature_status() -> dict:
     """Detailed on/off map of every optional feature (for a status table)."""
+    # ML models = trained files on disk (no API key needed — real local ML!)
+    _ml_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ml_models")
+    has_ml = (os.path.exists(os.path.join(_ml_dir, "diabetes_model.joblib"))
+              and os.path.exists(os.path.join(_ml_dir, "heart_model.joblib")))
     return {
         "AI brain (Groq)":       HAS_LLM,
         "Web search (Serper)":   HAS_WEB_SEARCH,
@@ -120,4 +124,5 @@ def feature_status() -> dict:
         "Nutrition (USDA)":      HAS_NUTRITION,
         "Health news":           HAS_NEWS,
         "SMS reminders (Twilio)": HAS_SMS,
+        "ML risk models 🧠":     has_ml,
     }
