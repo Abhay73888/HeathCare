@@ -1,4 +1,6 @@
 
+
+
 """
 ╔══════════════════════════════════════════════════════════════╗
 ║     🏥  MediMate AI  —  Web App (runs in Chrome/browser)      ║
@@ -148,8 +150,62 @@ st.markdown(
 
 
 # ─────────────────────────────────────────────
-# 🔐 LOGIN PANEL  —  ChatGPT-style (Google + Email + Guest)
+# 🔐 LOGIN PANEL  —  ChatGPT-style (Google + Email + 📱 Phone OTP + Guest)
 # ─────────────────────────────────────────────
+def _do_email_login():
+    """📧 Login form submit hone pe chalta hai (callback = 100% reliable click)."""
+    res = auth.login(st.session_state.get("li_email", ""),
+                     st.session_state.get("li_pass", ""))
+    if res["ok"]:
+        auth.set_local_user(res["user"])
+        st.session_state["show_login"] = False
+        st.session_state["_login_toast"] = f"Welcome back, {res['user']['name']}! 🎉"
+    else:
+        st.session_state["_login_error"] = res["error"]
+
+
+def _do_signup():
+    """✍️ Signup form submit callback — account banao + turant auto-login."""
+    name = st.session_state.get("su_name", "")
+    email = st.session_state.get("su_email", "")
+    res = auth.signup(name, email, st.session_state.get("su_pass", ""))
+    if res["ok"]:
+        auth.set_local_user({"name": name.strip(), "email": email.strip().lower(),
+                             "provider": "email"})
+        st.session_state["show_login"] = False
+        st.session_state["_login_toast"] = "Account ban gaya! 🎉"
+    else:
+        st.session_state["_login_error"] = res["error"]
+
+
+def _do_send_otp():
+    """📲 'Send OTP' button callback — OTP bhejo (real SMS ya demo mode)."""
+    res = auth.send_otp(st.session_state.get("ph_number", ""))
+    if res["ok"]:
+        st.session_state["_otp_sent_to"] = res["phone"]
+        # 🧪 Demo mode (Twilio setup nahi) → OTP screen pe hi dikhayenge
+        st.session_state["_otp_demo"] = res.get("otp") if res.get("demo") else None
+        st.session_state.pop("_login_error", None)
+    else:
+        st.session_state["_login_error"] = res["error"]
+
+
+def _do_verify_otp():
+    """✅ 'Verify OTP' button callback — sahi OTP → login/account ban gaya!"""
+    res = auth.verify_otp(st.session_state.get("ph_otp", ""))
+    if res["ok"]:
+        auth.set_local_user(res["user"])
+        st.session_state["show_login"] = False
+        st.session_state.pop("_otp_sent_to", None)
+        st.session_state.pop("_otp_demo", None)
+        st.session_state["_login_toast"] = (
+            f"Account ban gaya, {res['user']['name']}! 🎉 "
+            "(⚙️ Account settings me jaake naam & email add kar lo)"
+            if res["new"] else f"Welcome back, {res['user']['name']}! 🎉")
+    else:
+        st.session_state["_login_error"] = res["error"]
+
+
 def render_login_panel(reason: str = ""):
     """
     Login/signup UI dikhao.
@@ -159,6 +215,10 @@ def render_login_panel(reason: str = ""):
     st.subheader("🔐 Login karo — MediMate AI")
     if reason:
         st.warning(reason)
+
+    # Pichle run me koi error aayi thi? (callbacks se aati hai)
+    if st.session_state.get("_login_error"):
+        st.error(st.session_state.pop("_login_error"))
 
     # ── 🔵 Google login (agar setup hai) ──
     if auth.google_configured():
@@ -170,39 +230,51 @@ def render_login_panel(reason: str = ""):
             unsafe_allow_html=True)
     else:
         st.caption("💡 Google login enable karne ke liye `.streamlit/secrets.toml` "
-                   "banao (dekho `secrets.toml.example`).")
+                   "banao (dekho `secrets.toml.example`). Tab tak Email/Phone se login karo. 👇")
 
-    # ── 📧 Email login / ✍️ Signup tabs ──
-    tab_login, tab_signup = st.tabs(["📧 Login", "✍️ Sign up"])
+    # ── 📧 Email login / ✍️ Signup / 📱 Phone OTP tabs ──
+    tab_login, tab_signup, tab_phone = st.tabs(["📧 Login", "✍️ Sign up", "📱 Phone OTP"])
 
     with tab_login:
         with st.form("login_form", clear_on_submit=False):
-            email = st.text_input("Email", key="li_email")
-            password = st.text_input("Password", type="password", key="li_pass")
-            if st.form_submit_button("🔑 Login", use_container_width=True):
-                res = auth.login(email, password)
-                if res["ok"]:
-                    auth.set_local_user(res["user"])
-                    st.success(f"Welcome back, {res['user']['name']}! 🎉")
-                    st.rerun()
-                else:
-                    st.error(res["error"])
+            st.text_input("Email", key="li_email")
+            st.text_input("Password", type="password", key="li_pass")
+            st.form_submit_button("🔑 Login", use_container_width=True,
+                                  on_click=_do_email_login)
 
     with tab_signup:
         with st.form("signup_form", clear_on_submit=False):
-            name = st.text_input("Naam", key="su_name")
-            email = st.text_input("Email", key="su_email")
-            password = st.text_input("Password (min 6 chars)", type="password", key="su_pass")
-            if st.form_submit_button("✨ Account banao", use_container_width=True):
-                res = auth.signup(name, email, password)
-                if res["ok"]:
-                    # signup ke turant baad auto-login — smooth experience
-                    auth.set_local_user({"name": name.strip(), "email": email.strip().lower(),
-                                         "provider": "email"})
-                    st.success("Account ban gaya! 🎉")
-                    st.rerun()
-                else:
-                    st.error(res["error"])
+            st.text_input("Naam", key="su_name")
+            st.text_input("Email", key="su_email")
+            st.text_input("Password (min 6 chars)", type="password", key="su_pass")
+            st.form_submit_button("✨ Account banao", use_container_width=True,
+                                  on_click=_do_signup)
+
+    with tab_phone:
+        st.caption("📱 Phone number daalo → OTP aayega → verify karte hi account "
+                   "ban jayega / login ho jayega. Email baad me add kar sakte ho!")
+
+        # Step 1: number daalo, OTP bhejo
+        with st.form("phone_form", clear_on_submit=False):
+            st.text_input("Phone number", key="ph_number",
+                          placeholder="98765 43210  (ya +91 ke saath)")
+            already = bool(st.session_state.get("_otp_sent_to"))
+            st.form_submit_button("🔁 Resend OTP" if already else "📲 Send OTP",
+                                  use_container_width=True, on_click=_do_send_otp)
+
+        # Step 2: OTP verify karo
+        sent_to = st.session_state.get("_otp_sent_to")
+        if sent_to:
+            st.success(f"OTP bhej diya 👉 **{sent_to}** (5 min valid)")
+            if st.session_state.get("_otp_demo"):
+                # 🧪 Twilio setup nahi hai — demo OTP yahin dikhao taaki testing ho sake
+                st.info(f"🧪 **DEMO MODE** — real SMS ke liye `secrets.toml` me Twilio "
+                        f"keys daalo. Abhi ke liye OTP ye raha: **`{st.session_state['_otp_demo']}`**")
+            with st.form("otp_form", clear_on_submit=False):
+                st.text_input(f"{auth.OTP_LENGTH}-digit OTP", key="ph_otp",
+                              max_chars=auth.OTP_LENGTH, placeholder="123456")
+                st.form_submit_button("✅ Verify & Login", use_container_width=True,
+                                      on_click=_do_verify_otp)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -210,7 +282,41 @@ def render_login_panel(reason: str = ""):
 # ─────────────────────────────────────────────
 # SIDEBAR  —  account + settings + live feature status
 # ─────────────────────────────────────────────
+def _do_logout():
+    """🚪 Logout button callback — click pe PAKKA chalega (rerun issue nahi)."""
+    auth.logout()
+    st.session_state["show_login"] = False
+    st.session_state["_login_toast"] = "Logout ho gaya — phir milenge! 👋"
+
+
+def _open_login():
+    """🔐 Sidebar 'Login / Sign up' button callback."""
+    st.session_state["show_login"] = True
+
+
+def _do_update_profile(user_now: dict):
+    """⚙️ Account settings save callback — naam/email/password update."""
+    res = auth.update_profile(
+        user_now,
+        name=st.session_state.get("acc_name", ""),
+        email=st.session_state.get("acc_email", "") or None,
+        password=st.session_state.get("acc_pass", "") or None,
+    )
+    if res["ok"]:
+        # Google user ka session Streamlit sambhalta hai; local user update karo
+        if user_now.get("provider") in ("email", "phone"):
+            auth.set_local_user(res["user"])
+        st.session_state["_login_toast"] = "Profile update ho gayi! ✅"
+        st.session_state["acc_pass"] = ""   # password field khali karo
+    else:
+        st.session_state["_acc_error"] = res["error"]
+
+
 user = auth.current_user()   # None = guest mode
+
+# 🎉 Pichle callback ka success message (login/logout/profile-update ke baad)
+if st.session_state.get("_login_toast"):
+    st.toast(st.session_state.pop("_login_toast"))
 
 with st.sidebar:
     st.title("🏥 " + config.APP_NAME)
@@ -219,15 +325,34 @@ with st.sidebar:
     # ── 👤 Account section (ChatGPT-style) ──
     st.subheader("👤 Account")
     if user:
-        provider_icon = "🔵" if user.get("provider") == "google" else "📧"
+        provider_icon = {"google": "🔵", "phone": "📱"}.get(user.get("provider"), "📧")
+        contact = user.get("email") or user.get("phone", "")
         st.markdown(
             f'<div class="user-chip">✅ {user["name"]}<br>'
             f'<span style="font-weight:400; font-size:0.8rem;">'
-            f'{provider_icon} {user.get("email","")}</span></div>',
+            f'{provider_icon} {contact}</span></div>',
             unsafe_allow_html=True)
-        if st.button("🚪 Logout", use_container_width=True, key="logout_btn"):
-            auth.logout()
-            st.rerun()
+
+        # ⚙️ Account settings — phone users yahan se email+password add
+        #    kar sakte hain (phir email se BHI login chalega!)
+        if user.get("provider") in ("email", "phone"):
+            with st.expander("⚙️ Account settings"):
+                if st.session_state.get("_acc_error"):
+                    st.error(st.session_state.pop("_acc_error"))
+                if user.get("provider") == "phone" and not user.get("email"):
+                    st.info("📧 Email add karo — phir email+password se bhi "
+                            "login kar paoge!")
+                with st.form("acc_form", clear_on_submit=False):
+                    st.text_input("Naam", value=user["name"], key="acc_name")
+                    st.text_input("Email", value=user.get("email", ""), key="acc_email",
+                                  disabled=(user.get("provider") == "email"))
+                    st.text_input("Naya password (blank = no change)",
+                                  type="password", key="acc_pass")
+                    st.form_submit_button("💾 Save", use_container_width=True,
+                                          on_click=_do_update_profile, args=(user,))
+
+        st.button("🚪 Logout", use_container_width=True, key="logout_btn",
+                  on_click=_do_logout)
     else:
         left = auth.guest_messages_left()
         st.markdown(
@@ -235,9 +360,8 @@ with st.sidebar:
             f'{left}/{auth.GUEST_MESSAGE_LIMIT} free messages bache</div>',
             unsafe_allow_html=True)
         st.progress(auth.guest_messages_used() / auth.GUEST_MESSAGE_LIMIT)
-        if st.button("🔐 Login / Sign up", use_container_width=True, key="open_login_btn"):
-            st.session_state["show_login"] = True
-            st.rerun()
+        st.button("🔐 Login / Sign up", use_container_width=True,
+                  key="open_login_btn", on_click=_open_login)
 
     st.subheader("👤 Your details")
     patient_name = st.text_input("Name", value=user["name"] if user else "You")
@@ -297,9 +421,8 @@ if guest_limit_hit:
         "Unlimited chat ke liye login karo — bilkul free hai. 🎁")
 elif st.session_state.get("show_login") and user is None:
     render_login_panel()
-    if st.button("⬅️ Wapas chat pe (guest)", key="back_to_chat"):
-        st.session_state["show_login"] = False
-        st.rerun()
+    st.button("⬅️ Wapas chat pe (guest)", key="back_to_chat",
+              on_click=lambda: st.session_state.update(show_login=False))
 
 # Login ho gaya to panel band kar do
 if user:
