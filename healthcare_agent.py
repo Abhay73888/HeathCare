@@ -175,8 +175,9 @@ def set_reminder(medicine: str, time_hhmm: str, patient: str = "You") -> str:
 
 
 def ml_risk_prediction(condition: str, **params) -> str:
-    """🧠 REAL ML prediction — trained RandomForest models (not the LLM guessing!).
-    condition = 'diabetes' | 'heart'. Returns formatted risk + advice."""
+    """🧠 REAL ML prediction — trained scikit-learn models (not the LLM guessing!).
+    condition = 'diabetes' | 'heart' | 'stroke' | 'breast_cancer'.
+    Returns formatted risk + advice."""
     print(f"   🧠 [tool] ml_risk_prediction: {condition} {params}")
     try:
         if condition == "diabetes":
@@ -195,8 +196,26 @@ def ml_risk_prediction(condition: str, **params) -> str:
                 max_heart_rate=float(params.get("max_heart_rate", 150)),
                 exercise_angina=bool(params.get("exercise_angina", False)),
             )
+        elif condition == "stroke":
+            result = ml_predictor.predict_stroke(
+                age=int(params["age"]),
+                sex=str(params.get("sex", "male")),
+                avg_glucose=float(params.get("avg_glucose", 100)),
+                bmi=float(params.get("bmi", 25)),
+                hypertension=bool(params.get("hypertension", False)),
+                heart_disease=bool(params.get("heart_disease", False)),
+                smoking=str(params.get("smoking", "never")),
+            )
+        elif condition == "breast_cancer":
+            result = ml_predictor.predict_breast_cancer(
+                mean_radius=float(params["mean_radius"]),
+                mean_texture=float(params["mean_texture"]),
+                mean_perimeter=float(params["mean_perimeter"]),
+                mean_area=float(params["mean_area"]),
+            )
         else:
-            return f"Unknown condition '{condition}'. Use 'diabetes' or 'heart'."
+            return (f"Unknown condition '{condition}'. "
+                    "Use 'diabetes', 'heart', 'stroke' or 'breast_cancer'.")
     except (KeyError, ValueError) as e:
         return f"Missing/invalid parameter for {condition} prediction: {e}"
     return ml_predictor.format_prediction(result)
@@ -228,10 +247,15 @@ YOUR RULES:
    - weather_alert: when asked about weather, pollution/AQI, or outdoor safety.
    - health_news: when asked for latest health news/updates.
    - set_reminder: when the user wants a medicine reminder (needs medicine + HH:MM time).
-   - ml_risk_prediction: REAL trained ML model for diabetes/heart-disease risk.
-     Use when the user shares numbers like glucose, BMI, BP, cholesterol and asks
-     about their diabetes or heart risk. Ask for missing required numbers first
-     (diabetes: glucose+bmi+age; heart: age+sex+bp+cholesterol+max_heart_rate).
+   - ml_risk_prediction: REAL trained ML models for diabetes, heart-disease,
+     stroke, and breast-cancer risk. Use when the user shares health numbers
+     and asks about their risk. Ask for missing required numbers first:
+       diabetes: glucose+bmi+age
+       heart: age+sex+resting_bp+cholesterol+max_heart_rate
+       stroke: age+sex+avg_glucose+bmi (optional: hypertension, heart_disease, smoking)
+       breast_cancer: mean_radius+mean_texture+mean_perimeter+mean_area
+         (from a biopsy/FNA report — for other breast-health questions
+         answer normally without this tool).
 4. Be empathetic and clear. Use simple language. Reply in the user's language
    (deps.language).
 5. FORMAT the `answer` field for easy reading:
@@ -243,6 +267,10 @@ YOUR RULES:
      on directly answering the question.
 6. Rate confidence honestly: high (well-established), medium (general), low (uncertain).
 7. Provide 2-3 helpful follow-up questions.
+8. You MAY receive earlier conversation turns as message history. USE them:
+   remember the patient's previously shared symptoms, numbers and context,
+   and answer follow-up questions ("aur uska kya matlab hai?") in that light
+   instead of asking for the same information again.
 
 Fill EVERY field of the structured response thoughtfully.
 """
@@ -336,9 +364,11 @@ def _build_agent():
 
     @agent.tool
     async def tool_ml_prediction(ctx: RunContext[Deps], condition: str, params_json: str = "{}") -> str:
-        """REAL trained ML risk prediction. condition = diabetes|heart.
+        """REAL trained ML risk prediction. condition = diabetes|heart|stroke|breast_cancer.
         params_json for diabetes: {"glucose":150,"bmi":32,"age":45,"blood_pressure":80}
-        params_json for heart: {"age":58,"sex":"male","resting_bp":145,"cholesterol":250,"max_heart_rate":140,"exercise_angina":true}"""
+        params_json for heart: {"age":58,"sex":"male","resting_bp":145,"cholesterol":250,"max_heart_rate":140,"exercise_angina":true}
+        params_json for stroke: {"age":68,"sex":"male","avg_glucose":210,"bmi":33,"hypertension":true,"heart_disease":false,"smoking":"smokes"}
+        params_json for breast_cancer: {"mean_radius":20.5,"mean_texture":25,"mean_perimeter":135,"mean_area":1300}"""
         try:
             params = json.loads(params_json) if params_json else {}
         except json.JSONDecodeError:
@@ -360,17 +390,52 @@ def _get_agent():
 #  This is what app.py and the demo call.
 # ═════════════════════════════════════════════════════════════
 
+MEMORY_TURNS = 8   # last N messages (4 user + 4 assistant) LLM ko dikhte hain
+
+
+def _with_memory(question: str, chat_history: list[dict] | None) -> str:
+    """
+    🧠 Pichhle chat turns ko prompt me jodo taaki AI follow-ups samjhe.
+
+    Transcript-style approach rakha (pydantic-ai ke message_history objects
+    ke bajaye) — simple hai, purane pydantic-ai versions pe bhi chalta hai,
+    aur structured-output ke saath koi conflict nahi. Assistant replies ko
+    truncate karte hain taaki tokens control me rahen.
+    """
+    if not chat_history:
+        return question
+    recent = [m for m in chat_history if m.get("content")][-MEMORY_TURNS:]
+    if not recent:
+        return question
+    lines = []
+    for m in recent:
+        who = "Patient" if m.get("role") == "user" else "You (MediMate)"
+        content = str(m["content"]).strip()
+        if len(content) > 500:                      # long answers -> summary-cut
+            content = content[:500] + " …"
+        lines.append(f"{who}: {content}")
+    transcript = "\n".join(lines)
+    return (f"CONVERSATION SO FAR (for context — use it to understand follow-ups):\n"
+            f"{transcript}\n\n"
+            f"NEW QUESTION from the patient:\n{question}")
+
+
 async def answer_question(question: str, patient_name: str = "User",
                           language: str = "English",
                           country: str = config.DEFAULT_COUNTRY,
-                          save: bool = True) -> HealthcareResponse:
+                          save: bool = True,
+                          chat_history: list[dict] | None = None) -> HealthcareResponse:
     """
     The one function to rule them all. Give it a health question, get back a
     rich, structured HealthcareResponse.
 
+    chat_history (optional) = pichhle turns, taaki AI follow-ups samjhe:
+        [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
+    Sirf last few turns hi bheje jaate hain (token bachao 💰).
+
     Flow:
       1) 🚨 Emergency scan (always, offline, instant).
-      2) 🧠 If LLM available -> smart AI answer with tools.
+      2) 🧠 If LLM available -> smart AI answer with tools + memory.
       3) 📴 Else -> offline knowledge base + calculators fallback.
     """
     # ── STEP 1: Emergency scan (safety first, runs no matter what) ──
@@ -408,7 +473,8 @@ async def answer_question(question: str, patient_name: str = "User",
             try:
                 agent, Deps, _ = _get_agent()
                 deps = Deps(patient_name=patient_name, language=language, country=country)
-                result = await agent.run(question, deps=deps)
+                prompt = _with_memory(question, chat_history)
+                result = await agent.run(prompt, deps=deps)
                 data = getattr(result, "output", None) or getattr(result, "data", None)
 
                 resp = HealthcareResponse(

@@ -117,6 +117,10 @@ def feature_status() -> dict:
     _ml_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ml_models")
     has_ml = (os.path.exists(os.path.join(_ml_dir, "diabetes_model.joblib"))
               and os.path.exists(os.path.join(_ml_dir, "heart_model.joblib")))
+    # v2 models (stroke + breast cancer) — alag flag taaki purane trained
+    # setups me bhi status sahi dikhe
+    has_ml_v2 = (os.path.exists(os.path.join(_ml_dir, "stroke_model.joblib"))
+                 and os.path.exists(os.path.join(_ml_dir, "breast_model.joblib")))
     return {
         "AI brain (Groq)":       HAS_LLM,
         "Web search (Serper)":   HAS_WEB_SEARCH,
@@ -125,4 +129,5 @@ def feature_status() -> dict:
         "Health news":           HAS_NEWS,
         "SMS reminders (Twilio)": HAS_SMS,
         "ML risk models 🧠":     has_ml,
+        "ML v2 (stroke+cancer) 🧠": has_ml_v2,
     }

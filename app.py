@@ -375,6 +375,7 @@ async def chat_loop():
 
     patient = ask("👋 What's your name?", "Friend")
     language = "English"
+    chat_memory: list[dict] = []   # 🧠 pichhle turns — AI follow-ups samjhe
     say(f"\nNice to meet you, {patient}! How can I help you today? 🩺", "green")
 
     # Gently surface any medicine reminders due within the next hour
@@ -448,10 +449,17 @@ async def chat_loop():
         # ---- Natural health question -> the AI agent ----
         if _RICH:
             with console.status("[cyan]🩺 Thinking...", spinner="dots"):
-                resp = await answer_question(user, patient, language)
+                resp = await answer_question(user, patient, language,
+                                             chat_history=chat_memory)
         else:
             print("🩺 Thinking...")
-            resp = await answer_question(user, patient, language)
+            resp = await answer_question(user, patient, language,
+                                         chat_history=chat_memory)
+
+        # 🧠 Memory update — sirf last few turns rakhte hain (token bachao)
+        chat_memory.append({"role": "user", "content": user})
+        chat_memory.append({"role": "assistant", "content": resp.answer})
+        chat_memory = chat_memory[-12:]
 
         render_response(resp)
 

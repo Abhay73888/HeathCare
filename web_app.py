@@ -461,7 +461,7 @@ with st.expander("⚖️ BMI Calculator — apna BMI turant check karo"):
 
 
 
-with st.expander("🧠 ML Risk Predictor — diabetes & heart risk check karo (real ML!)"):
+with st.expander("🧠 ML Risk Predictor — diabetes · heart · stroke · breast cancer (real ML!)"):
     if not ml_predictor.models_ready():
         st.info("🤖 Models abhi trained nahi hain. Terminal me ek baar chalao:\n\n"
                 "```\npython ml_predictor.py\n```\n"
@@ -469,10 +469,15 @@ with st.expander("🧠 ML Risk Predictor — diabetes & heart risk check karo (r
     else:
         m = ml_predictor.get_metrics()
         if m:
-            st.caption(f"📊 Model accuracy — Diabetes: {m['diabetes']['accuracy']*100:.0f}% · "
-                       f"Heart: {m['heart']['accuracy']*100:.0f}% (on unseen test data)")
+            acc_bits = []
+            for key, label in [("diabetes", "Diabetes"), ("heart", "Heart"),
+                               ("stroke", "Stroke"), ("breast", "Breast")]:
+                if key in m:
+                    acc_bits.append(f"{label}: {m[key]['accuracy']*100:.0f}%")
+            st.caption(f"📊 Model accuracy — {' · '.join(acc_bits)} (on unseen test data)")
 
-        tab_dia, tab_heart = st.tabs(["🍬 Diabetes risk", "❤️ Heart risk"])
+        tab_dia, tab_heart, tab_stroke, tab_breast = st.tabs(
+            ["🍬 Diabetes risk", "❤️ Heart risk", "🧠 Stroke risk", "🎗️ Breast cancer"])
 
         # ── 🍬 Diabetes tab ──
         with tab_dia:
@@ -516,6 +521,64 @@ with st.expander("🧠 ML Risk Predictor — diabetes & heart risk check karo (r
                     age=h_age, sex=h_sex.lower(), resting_bp=h_bp,
                     cholesterol=h_chol, max_heart_rate=h_hr,
                     exercise_angina=h_angina)
+                if res["ok"]:
+                    lvl = res["risk_level"]
+                    show = st.error if lvl == "HIGH" else st.warning if lvl == "MODERATE" else st.success
+                    show(f"{res['emoji']} **{res['condition']} risk: {lvl}** "
+                         f"(~{res['risk_percent']}% probability)")
+                    st.progress(min(res["risk_percent"] / 100, 1.0))
+                    for a in res["advice"]:
+                        st.markdown(f"- {a}")
+                    st.caption(f"{res['model']}  ·  {res['disclaimer']}")
+                else:
+                    st.info(res["error"])
+
+        # ── 🧠 Stroke tab ──
+        with tab_stroke:
+            c1, c2 = st.columns(2)
+            with c1:
+                s_age = st.number_input("Age (years)", 1, 120, 50, key="s_age")
+                s_sex = st.selectbox("Sex", ["Male", "Female"], key="s_sex")
+                s_glu = st.number_input("Average glucose (mg/dL)", 40, 400, 100, key="s_glu")
+                s_bmi = st.number_input("BMI", 10.0, 60.0, 25.0, step=0.5, key="s_bmi")
+            with c2:
+                s_htn = st.checkbox("High BP (hypertension) diagnosed?", key="s_htn")
+                s_hd = st.checkbox("Heart disease hai?", key="s_hd")
+                s_smoke = st.selectbox("Smoking", ["Never", "Formerly", "Smokes"], key="s_smoke")
+
+            if st.button("🔮 Predict stroke risk", use_container_width=True, key="s_btn"):
+                res = ml_predictor.predict_stroke(
+                    age=s_age, sex=s_sex.lower(), avg_glucose=s_glu, bmi=s_bmi,
+                    hypertension=s_htn, heart_disease=s_hd,
+                    smoking=s_smoke.lower())
+                if res["ok"]:
+                    lvl = res["risk_level"]
+                    show = st.error if lvl == "HIGH" else st.warning if lvl == "MODERATE" else st.success
+                    show(f"{res['emoji']} **{res['condition']} risk: {lvl}** "
+                         f"(~{res['risk_percent']}% probability)")
+                    st.progress(min(res["risk_percent"] / 100, 1.0))
+                    for a in res["advice"]:
+                        st.markdown(f"- {a}")
+                    st.caption(f"{res['model']}  ·  {res['disclaimer']}")
+                else:
+                    st.info(res["error"])
+
+        # ── 🎗️ Breast cancer tab (biopsy/FNA report measurements) ──
+        with tab_breast:
+            st.caption("🎗️ Ye tab biopsy/FNA report ke tumor measurements ke liye hai — "
+                       "report me 'mean radius/texture/perimeter/area' values hoti hain.")
+            c1, c2 = st.columns(2)
+            with c1:
+                b_rad = st.number_input("Mean radius", 5.0, 30.0, 14.0, step=0.1, key="b_rad")
+                b_tex = st.number_input("Mean texture", 5.0, 40.0, 19.0, step=0.1, key="b_tex")
+            with c2:
+                b_per = st.number_input("Mean perimeter", 40.0, 200.0, 92.0, step=0.5, key="b_per")
+                b_area = st.number_input("Mean area", 100.0, 2600.0, 650.0, step=5.0, key="b_area")
+
+            if st.button("🔮 Screen tumor measurements", use_container_width=True, key="b_btn"):
+                res = ml_predictor.predict_breast_cancer(
+                    mean_radius=b_rad, mean_texture=b_tex,
+                    mean_perimeter=b_per, mean_area=b_area)
                 if res["ok"]:
                     lvl = res["risk_level"]
                     show = st.error if lvl == "HIGH" else st.warning if lvl == "MODERATE" else st.success
@@ -580,12 +643,16 @@ if prompt:
     with st.chat_message("assistant", avatar="🏥"):
         with st.spinner("Soch raha hoon… 🤔"):
             try:
+                # 🧠 Memory: pichhle turns bhi bhejo (current prompt chhodkar)
+                # taaki AI follow-up questions samjhe.
+                past = st.session_state.messages[:-1]
                 resp = _run(agent.answer_question(
                     prompt,
                     patient_name=patient_name,
                     language=language,
                     country=country,
                     save=True,
+                    chat_history=past,
                 ))
             except Exception as e:
                 # Never show a blank screen — surface the error kindly.

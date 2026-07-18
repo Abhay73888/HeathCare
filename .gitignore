@@ -21,3 +21,6 @@ venv/
 # Editor
 .vscode/
 .idea/
+
+# Claude Code local files
+.claude/
