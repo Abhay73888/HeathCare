@@ -32,22 +32,40 @@ for _stream in (sys.stdout, sys.stderr):
 # Load variables from .env into the environment
 load_dotenv()
 
+
+def _secret(name: str, default: str = "") -> str:
+    """
+    Key dhoondo — pehle environment/.env me, phir Streamlit secrets me.
+    Streamlit Cloud pe keys `st.secrets` me hoti hain (env var guaranteed
+    nahi hai), isliye dono jagah check karte hain. Local run me streamlit
+    import ya secrets file na ho to chupchaap default de do.
+    """
+    val = os.getenv(name, "").strip()
+    if val:
+        return val
+    try:
+        import streamlit as st
+        return str(st.secrets.get(name, default)).strip()
+    except Exception:
+        return default
+
+
 # ─────────────────────────────────────────────
-# API KEYS  (read from environment — safe!)
+# API KEYS  (env/.env → Streamlit secrets — never hard-coded!)
 # ─────────────────────────────────────────────
-GROQ_API_KEY   = os.getenv("GROQ_API_KEY", "").strip()
-SERPER_API_KEY = os.getenv("SERPER_API_KEY", "").strip()
+GROQ_API_KEY   = _secret("GROQ_API_KEY")
+SERPER_API_KEY = _secret("SERPER_API_KEY")
 
 # New APIs (all optional — features gracefully fall back if a key is missing)
-OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "").strip()   # weather + air quality
-USDA_API_KEY        = os.getenv("USDA_API_KEY", "").strip()          # nutrition data
-NEWSAPI_KEY         = os.getenv("NEWSAPI_KEY", "").strip()           # health news
+OPENWEATHER_API_KEY = _secret("OPENWEATHER_API_KEY")   # weather + air quality
+USDA_API_KEY        = _secret("USDA_API_KEY")          # nutrition data
+NEWSAPI_KEY         = _secret("NEWSAPI_KEY")           # health news
 
 # Twilio — SMS medicine reminders & emergency alerts
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
-TWILIO_AUTH_TOKEN  = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
-TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "").strip()
-TWILIO_TO_NUMBER   = os.getenv("TWILIO_TO_NUMBER", "").strip()       # your/emergency contact number
+TWILIO_ACCOUNT_SID = _secret("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN  = _secret("TWILIO_AUTH_TOKEN")
+TWILIO_FROM_NUMBER = _secret("TWILIO_FROM_NUMBER")
+TWILIO_TO_NUMBER   = _secret("TWILIO_TO_NUMBER")       # your/emergency contact number
 
 # Feature flags — auto-detected from whether keys exist.
 # Missing key -> feature runs in a safe offline/demo mode instead of crashing.
@@ -64,7 +82,11 @@ DEFAULT_CITY = os.getenv("DEFAULT_CITY", "Delhi")
 # ─────────────────────────────────────────────
 # MODEL SETTINGS
 # ─────────────────────────────────────────────
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MODEL = _secret("GROQ_MODEL", "llama-3.3-70b-versatile")
+
+# 🛟 Backup model — primary ka free-tier daily limit (100k tokens) khatam ho
+# jaaye to agent isse switch ho jata hai instead of going offline.
+GROQ_FALLBACK_MODEL = _secret("GROQ_FALLBACK_MODEL", "llama-3.1-8b-instant")
 
 # ─────────────────────────────────────────────
 # APP SETTINGS

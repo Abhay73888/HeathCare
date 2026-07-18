@@ -225,7 +225,8 @@ def ml_risk_prediction(condition: str, **params) -> str:
 #  THE LLM AGENT  (built lazily so offline mode needs no extra deps)
 # ═════════════════════════════════════════════════════════════
 
-_AGENT = None  # cached singleton
+_AGENT = None   # cached singleton (primary model)
+_AGENTS = {}    # model_name -> built agent (primary + fallback cache)
 
 SYSTEM_PROMPT = """
 You are MediMate AI — a warm, careful, and knowledgeable Healthcare AI Assistant.
@@ -276,8 +277,8 @@ Fill EVERY field of the structured response thoughtfully.
 """
 
 
-def _build_agent():
-    """Create the PydanticAI agent + register tools. Called once, lazily."""
+def _build_agent(model_name: str | None = None):
+    """Create the PydanticAI agent + register tools. Called once per model, lazily."""
     from typing import Literal
     from pydantic import BaseModel, Field
     from pydantic_ai import Agent, RunContext
@@ -303,7 +304,7 @@ def _build_agent():
 
     import os
     os.environ["GROQ_API_KEY"] = config.GROQ_API_KEY  # SDK reads it from env
-    model = GroqModel(config.GROQ_MODEL)
+    model = GroqModel(model_name or config.GROQ_MODEL)
 
     # retries=5: some Groq models occasionally emit a malformed tool-call
     # (e.g. a literal "<function=...>" string instead of proper JSON). A few
@@ -378,11 +379,14 @@ def _build_agent():
     return agent, Deps, LLMResponse
 
 
-def _get_agent():
+def _get_agent(model_name: str | None = None):
+    """Agent for a model (default = primary). Built once, then cached."""
     global _AGENT
-    if _AGENT is None:
-        _AGENT = _build_agent()
-    return _AGENT
+    name = model_name or config.GROQ_MODEL
+    if name not in _AGENTS:
+        _AGENTS[name] = _build_agent(name)
+    _AGENT = _AGENTS[name]  # keep old global alive for anyone importing it
+    return _AGENTS[name]
 
 
 # ═════════════════════════════════════════════════════════════
@@ -468,42 +472,60 @@ async def answer_question(question: str, patient_name: str = "User",
         # is INTERMITTENT — the very same question usually succeeds on a fresh
         # attempt. So we retry the ENTIRE run a few times before giving up and
         # dropping to offline mode. This is what keeps answers consistently "AI".
+        #
+        # Rate limit (429 / daily token cap) is NOT intermittent for the same
+        # model — but Groq limits are PER MODEL, so we hop to the fallback
+        # model and stay "AI" instead of dropping to offline.
         MAX_ATTEMPTS = 3
-        for attempt in range(1, MAX_ATTEMPTS + 1):
-            try:
-                agent, Deps, _ = _get_agent()
-                deps = Deps(patient_name=patient_name, language=language, country=country)
-                prompt = _with_memory(question, chat_history)
-                result = await agent.run(prompt, deps=deps)
-                data = getattr(result, "output", None) or getattr(result, "data", None)
-
-                resp = HealthcareResponse(
-                    answer=data.answer,
-                    urgency_level=data.urgency_level,
-                    possible_causes=list(data.possible_causes),
-                    recommended_actions=list(data.recommended_actions),
-                    when_to_see_doctor=data.when_to_see_doctor,
-                    web_searched=data.web_searched,
-                    confidence=data.confidence,
-                    disclaimer=data.disclaimer,
-                    follow_up_questions=list(data.follow_up_questions),
-                    source="ai",
-                )
-                if save:
-                    history.save_consultation(patient_name, question, resp.answer, resp.urgency_level)
-                return resp
-            except Exception as e:
-                offline_note = _explain_llm_error(e)
-                # A format/validation miss is intermittent -> retry the whole run.
-                text = str(e).lower()
-                retryable = ("maximum output retries" in text or "validation" in text
-                             or "unexpectedmodelbehavior" in type(e).__name__.lower())
-                if retryable and attempt < MAX_ATTEMPTS:
-                    print(f"   🔄 AI format hiccup (attempt {attempt}/{MAX_ATTEMPTS}). Retrying…")
-                    continue
-                # Rate-limit / bad-key / network -> no point retrying; fall through.
-                print(f"   ⚠️  LLM unavailable ({offline_note}). Falling back to offline mode.")
+        models_to_try = [config.GROQ_MODEL]
+        if config.GROQ_FALLBACK_MODEL and config.GROQ_FALLBACK_MODEL != config.GROQ_MODEL:
+            models_to_try.append(config.GROQ_FALLBACK_MODEL)
+        give_up = False  # set on non-retryable errors (bad key / network)
+        for model_name in models_to_try:
+            if give_up:
                 break
+            for attempt in range(1, MAX_ATTEMPTS + 1):
+                try:
+                    agent, Deps, _ = _get_agent(model_name)
+                    deps = Deps(patient_name=patient_name, language=language, country=country)
+                    prompt = _with_memory(question, chat_history)
+                    result = await agent.run(prompt, deps=deps)
+                    data = getattr(result, "output", None) or getattr(result, "data", None)
+
+                    resp = HealthcareResponse(
+                        answer=data.answer,
+                        urgency_level=data.urgency_level,
+                        possible_causes=list(data.possible_causes),
+                        recommended_actions=list(data.recommended_actions),
+                        when_to_see_doctor=data.when_to_see_doctor,
+                        web_searched=data.web_searched,
+                        confidence=data.confidence,
+                        disclaimer=data.disclaimer,
+                        follow_up_questions=list(data.follow_up_questions),
+                        source="ai",
+                    )
+                    if save:
+                        history.save_consultation(patient_name, question, resp.answer, resp.urgency_level)
+                    return resp
+                except Exception as e:
+                    offline_note = _explain_llm_error(e)
+                    text = str(e).lower()
+                    # Daily token limit on THIS model -> try the next model.
+                    rate_limited = ("rate_limit" in text or "429" in text
+                                    or "tokens per day" in text)
+                    if rate_limited:
+                        print(f"   ⏳ {model_name} ka daily limit khatam. Trying next model…")
+                        break  # inner loop -> next model
+                    # A format/validation miss is intermittent -> retry the whole run.
+                    retryable = ("maximum output retries" in text or "validation" in text
+                                 or "unexpectedmodelbehavior" in type(e).__name__.lower())
+                    if retryable and attempt < MAX_ATTEMPTS:
+                        print(f"   🔄 AI format hiccup (attempt {attempt}/{MAX_ATTEMPTS}). Retrying…")
+                        continue
+                    # Bad-key / network -> no point retrying; fall through to offline.
+                    print(f"   ⚠️  LLM unavailable ({offline_note}). Falling back to offline mode.")
+                    give_up = True
+                    break
 
     # ── STEP 3: Offline fallback ──
     resp = _offline_answer(question)
